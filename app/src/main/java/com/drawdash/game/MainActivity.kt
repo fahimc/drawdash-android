@@ -378,6 +378,10 @@ fun RecognitionCard(state: GameState) {
 
 @Composable
 fun DrawingCanvas(state: GameState, vm: DrawDashViewModel, modifier: Modifier) {
+    var livePoints by remember { mutableStateOf<List<Offset>>(emptyList()) }
+    var liveColor by remember { mutableStateOf(DashColor.Ink) }
+    var liveWidth by remember { mutableStateOf(10f) }
+    var liveTool by remember { mutableStateOf(ToolType.Pencil) }
     Canvas(
         modifier = modifier
             .background(Color.White, RoundedCornerShape(18.dp))
@@ -387,22 +391,37 @@ fun DrawingCanvas(state: GameState, vm: DrawDashViewModel, modifier: Modifier) {
                 awaitPointerEventScope {
                     while (true) {
                         val down = awaitPointerEvent().changes.firstOrNull { it.pressed } ?: continue
+                        liveColor = state.drawing.color
+                        liveWidth = state.drawing.strokeWidth
+                        liveTool = state.drawing.currentTool
+                        livePoints = listOf(down.position)
                         vm.beginStroke(down.position.x, down.position.y, down.pressure)
                         down.consume()
                         while (down.pressed) {
                             val event = awaitPointerEvent()
                             val change = event.changes.first()
                             if (!change.pressed) break
+                            livePoints = livePoints + change.position
                             vm.moveStroke(change.position.x, change.position.y, change.pressure)
                             change.consume()
                         }
                         vm.endStroke()
+                        livePoints = emptyList()
                     }
                 }
             },
     ) {
         state.drawing.strokes.forEach { stroke ->
             drawStroke(stroke)
+        }
+        livePoints.zipWithNext().forEach { (a, b) ->
+            drawLine(
+                color = if (liveTool == ToolType.Eraser) Color.White else liveColor,
+                start = a,
+                end = b,
+                strokeWidth = liveWidth,
+                cap = StrokeCap.Round,
+            )
         }
         drawRoundRect(
             color = DashColor.Cyan.copy(alpha = 0.08f),
