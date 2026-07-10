@@ -1,6 +1,8 @@
 package com.drawdash.game
 
 import android.os.Bundle
+import android.media.AudioManager
+import android.media.ToneGenerator
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -69,8 +71,10 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -233,6 +237,21 @@ fun DifficultyScreen(nav: NavHostController, seconds: Int, prefs: UserPrefs, vm:
 @Composable
 fun GameScreen(nav: NavHostController, state: GameState, prefs: UserPrefs, vm: DrawDashViewModel) {
     val lifecycleOwner = LocalLifecycleOwner.current
+    val haptics = LocalHapticFeedback.current
+    val tones = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 55) }
+    DisposableEffect(Unit) { onDispose { tones.release() } }
+    LaunchedEffect(state.phase) {
+        if (state.phase == GamePhase.Correct) {
+            if (prefs.haptics) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            if (prefs.sound) tones.startTone(ToneGenerator.TONE_PROP_ACK, 120)
+        }
+    }
+    LaunchedEffect(state.remainingSeconds) {
+        if (state.remainingSeconds in 1..3) {
+            if (prefs.haptics) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            if (prefs.sound) tones.startTone(ToneGenerator.TONE_PROP_BEEP, 80)
+        }
+    }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) vm.pause() }
         lifecycleOwner.lifecycle.addObserver(observer)
