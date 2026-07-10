@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.DrawDash" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:navigationBarColor">#FFF9ED</item>
+        <item name="android:statusBarColor">#FFF9ED</item>
+    </style>
+</resources>
