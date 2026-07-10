@@ -3,6 +3,12 @@ package com.drawdash.game
 import android.os.Bundle
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Color as AndroidColor
+import android.graphics.Paint
+import android.graphics.PointF
+import android.view.MotionEvent
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -68,6 +74,7 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -79,6 +86,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.navigation.NavHostController
@@ -378,68 +386,137 @@ fun RecognitionCard(state: GameState) {
 
 @Composable
 fun DrawingCanvas(state: GameState, vm: DrawDashViewModel, modifier: Modifier) {
-    var livePoints by remember { mutableStateOf<List<Offset>>(emptyList()) }
-    var liveColor by remember { mutableStateOf(DashColor.Ink) }
-    var liveWidth by remember { mutableStateOf(10f) }
-    var liveTool by remember { mutableStateOf(ToolType.Pencil) }
-    Canvas(
+    AndroidView(
         modifier = modifier
             .background(Color.White, RoundedCornerShape(18.dp))
             .border(2.dp, DashColor.Navy.copy(alpha = 0.2f), RoundedCornerShape(18.dp))
-            .semantics { contentDescription = "Drawing canvas" }
-            .pointerInput(state.phase, state.drawing.currentTool, state.drawing.strokeWidth, state.drawing.color) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val down = awaitPointerEvent().changes.firstOrNull { it.pressed } ?: continue
-                        liveColor = state.drawing.color
-                        liveWidth = state.drawing.strokeWidth
-                        liveTool = state.drawing.currentTool
-                        livePoints = listOf(down.position)
-                        vm.beginStroke(down.position.x, down.position.y, down.pressure)
-                        down.consume()
-                        while (down.pressed) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.first()
-                            if (!change.pressed) break
-                            livePoints = livePoints + change.position
-                            vm.moveStroke(change.position.x, change.position.y, change.pressure)
-                            change.consume()
-                        }
-                        vm.endStroke()
-                        livePoints = emptyList()
-                    }
-                }
-            },
-    ) {
-        state.drawing.strokes.forEach { stroke ->
-            drawStroke(stroke)
-        }
-        livePoints.zipWithNext().forEach { (a, b) ->
-            drawLine(
-                color = if (liveTool == ToolType.Eraser) Color.White else liveColor,
-                start = a,
-                end = b,
-                strokeWidth = liveWidth,
-                cap = StrokeCap.Round,
-            )
-        }
-        drawRoundRect(
-            color = DashColor.Cyan.copy(alpha = 0.08f),
-            style = Stroke(width = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(18f, 18f))),
-        )
-    }
+            .semantics { contentDescription = "Drawing canvas" },
+        factory = { context ->
+            LowLatencyDrawingView(context).apply {
+                onBegin = { x, y, pressure -> vm.beginStroke(x, y, pressure) }
+                onMove = { x, y, pressure -> vm.moveStroke(x, y, pressure) }
+                onEnd = { vm.endStroke() }
+            }
+        },
+        update = { view ->
+            view.isDrawingEnabled = state.phase == GamePhase.Drawing
+            view.tool = state.drawing.currentTool
+            view.strokeColor = state.drawing.color.toArgb()
+            view.strokeWidthPx = state.drawing.strokeWidth
+            view.setCommittedStrokes(state.drawing.strokes)
+        },
+    )
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStroke(stroke: DrawingStroke) {
-    stroke.points.zipWithNext().forEach { (a, b) ->
-        drawLine(
-            color = if (stroke.tool == ToolType.Eraser) Color.White else stroke.color,
-            start = Offset(a.x, a.y),
-            end = Offset(b.x, b.y),
-            strokeWidth = stroke.width * a.pressure.coerceIn(0.4f, 1.2f),
-            cap = StrokeCap.Round,
-            blendMode = if (stroke.tool == ToolType.Eraser) BlendMode.SrcOver else BlendMode.SrcOver,
-        )
+private class LowLatencyDrawingView(context: android.content.Context) : View(context) {
+    var onBegin: (Float, Float, Float) -> Unit = { _, _, _ -> }
+    var onMove: (Float, Float, Float) -> Unit = { _, _, _ -> }
+    var onEnd: () -> Unit = {}
+    var isDrawingEnabled: Boolean = false
+    var tool: ToolType = ToolType.Pencil
+    var strokeColor: Int = DashColor.Ink.toArgb()
+    var strokeWidthPx: Float = 10f
+
+    private var committedStrokes: List<DrawingStroke> = emptyList()
+    private val livePoints = ArrayList<PointF>(256)
+    private var liveColor: Int = strokeColor
+    private var liveWidth: Float = strokeWidthPx
+    private var liveTool: ToolType = tool
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        color = AndroidColor.argb(32, 19, 185, 214)
+    }
+
+    init {
+        setBackgroundColor(AndroidColor.WHITE)
+        isFocusable = true
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        contentDescription = "Drawing canvas"
+    }
+
+    fun setCommittedStrokes(strokes: List<DrawingStroke>) {
+        if (committedStrokes !== strokes) {
+            committedStrokes = strokes
+            invalidate()
+        }
+    }
+
+    override fun onDraw(canvas: AndroidCanvas) {
+        super.onDraw(canvas)
+        committedStrokes.forEach { drawCommittedStroke(canvas, it) }
+        drawLiveStroke(canvas)
+        canvas.drawRoundRect(2f, 2f, width - 2f, height - 2f, 18f, 18f, borderPaint)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!isDrawingEnabled) return true
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                livePoints.clear()
+                liveColor = strokeColor
+                liveWidth = strokeWidthPx
+                liveTool = tool
+                addLivePoint(event.x, event.y)
+                onBegin(event.x, event.y, event.pressure.coerceAtLeast(0.1f))
+                invalidate()
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                for (i in 0 until event.historySize) {
+                    val x = event.getHistoricalX(i)
+                    val y = event.getHistoricalY(i)
+                    addLivePoint(x, y)
+                    onMove(x, y, event.getHistoricalPressure(i).coerceAtLeast(0.1f))
+                }
+                addLivePoint(event.x, event.y)
+                onMove(event.x, event.y, event.pressure.coerceAtLeast(0.1f))
+                invalidate()
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_UP) {
+                    addLivePoint(event.x, event.y)
+                    onMove(event.x, event.y, event.pressure.coerceAtLeast(0.1f))
+                    onEnd()
+                }
+                livePoints.clear()
+                parent?.requestDisallowInterceptTouchEvent(false)
+                invalidate()
+                return true
+            }
+        }
+        return true
+    }
+
+    private fun addLivePoint(x: Float, y: Float) {
+        val last = livePoints.lastOrNull()
+        if (last == null || kotlin.math.hypot((x - last.x).toDouble(), (y - last.y).toDouble()) >= 1.5) {
+            livePoints.add(PointF(x.coerceIn(0f, width.toFloat()), y.coerceIn(0f, height.toFloat())))
+        }
+    }
+
+    private fun drawCommittedStroke(canvas: AndroidCanvas, stroke: DrawingStroke) {
+        paint.color = if (stroke.tool == ToolType.Eraser) AndroidColor.WHITE else stroke.color.toArgb()
+        paint.strokeWidth = stroke.width
+        stroke.points.zipWithNext().forEach { (a, b) ->
+            canvas.drawLine(a.x, a.y, b.x, b.y, paint)
+        }
+    }
+
+    private fun drawLiveStroke(canvas: AndroidCanvas) {
+        if (livePoints.size < 2) return
+        paint.color = if (liveTool == ToolType.Eraser) AndroidColor.WHITE else liveColor
+        paint.strokeWidth = liveWidth
+        livePoints.zipWithNext().forEach { (a, b) ->
+            canvas.drawLine(a.x, a.y, b.x, b.y, paint)
+        }
     }
 }
 
